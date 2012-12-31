@@ -1,0 +1,931 @@
+/*
+Pascal, The Calculator Robot
+Copyright © 2012 Bader Alabdulrazzaq & Saoud Alroomi (Kuwait University)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files
+(the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished
+to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
+#define SIZE_Y  45  //Number of lines to scan for each digit.
+#define SIZE_X  40  //width of scanned digit
+
+#define STEP_X  2   //motor steps between reading lightsensor.
+#define STEP_Y  20  // original20  //motor steps between scanned lines
+
+#define SPEED_X 50    //motor power for arm when scanning
+#define SPEED_Y 70    // motor power for wheels when scanning
+
+#define PENSPEED_X 40  //motor power for arm when drawing
+#define PENSPEED_Y 30  // motor power for wheels when drawing
+
+#define CELLHEIGHT 700 
+#define BEFORE 20
+
+#define NORTH     1
+#define NORTHEAST 2
+#define EAST      3
+#define SOUTHEAST 4
+#define SOUTH     5
+#define SOUTHWEST 6
+#define WEST      7
+#define NORTHWEST 8
+
+#define Pixel(int pos)  RectOut(18+(pos%SIZE_X)*2,(pos/SIZE_X)*2,1,1);
+
+int leftToRightOffset,rightToLeftOffset;
+byte scanbuffer[1000];
+
+int sensorCellX[] = {-590,-425,-280,-135,0,135,280,425,590};
+int sensorCellY[] = {-590,-310,-150,-50,0,-50,-150,-310,-590};
+
+int penCellX[] = {-390,-290,-190,-95,0,95,190,290,390};
+int penCellY[] = {-390,-220,-80,-35,0,-35,-80,-220,-390};
+
+byte bmp[SIZE_X*SIZE_Y];
+byte image[SIZE_X*SIZE_Y];
+
+int row[MAX_LEVEL];
+int col[MAX_LEVEL];
+int box[MAX_LEVEL];
+int cell[MAX_LEVEL];
+int digit[MAX_LEVEL];
+
+
+// Move Pen Down
+void PenDown()
+{
+  RotateMotor(OUT_C,20,13);
+}
+
+// Move Pen Up
+void PenUp()
+{
+  RotateMotor(OUT_C,20,-13);
+}
+
+
+ //Scan Row Function
+void ScanRow(int r,int direction)
+{
+  int bmpOffset=r*SIZE_X;
+  if(direction==1)
+  {
+    for(int x=0;x<BEFORE;x+=1)
+      RotateMotorEx(OUT_B,SPEED_X,STEP_X,0,false,false);
+    for(int x=0;x<SIZE_X*3;x++)
+    {
+      byte light;
+      RotateMotorEx(OUT_B,SPEED_X,STEP_X,0,false,false);
+      light=Sensor(IN_2);
+      scanbuffer[x]=light;
+    }
+  }
+  else
+  {
+    for(int x=0;x<BEFORE;x+=1)
+      RotateMotorEx(OUT_B,SPEED_X,-1 * STEP_X,0,false,false);
+    for(int x=SIZE_X*3-1;x>=0;x--)
+    {
+      byte light;
+      RotateMotorEx(OUT_B,SPEED_X,-1 * STEP_X,0,false,false);
+      light=Sensor(IN_2);
+      scanbuffer[x]=light;
+    }
+  }
+  int maxLight=0;
+  int minLight=255;
+  for(int x=0;x<SIZE_X;x++)
+  {
+    int light=0;
+    for(int i=0;i<3;i++)
+      light+=scanbuffer[x*3+i];
+    light/=3;
+    bmp[bmpOffset+x]=light;
+    if(light>maxLight)
+      maxLight=light;
+    if(light<minLight)
+      minLight=light;
+  }
+  int threshold=(maxLight+minLight)/2;
+  for(int x=0;x<SIZE_X;x++)
+    if(bmp[bmpOffset+x]<threshold)
+      RectOut(18+x*2,r*2,1,1);
+  RotateMotorPID(OUT_B,-1 * direction * SPEED_X,SIZE_X*3*STEP_X+BEFORE*STEP_X,50,40,90);
+}
+
+// Move Sensor to position Function
+void MoveSensor(int r, int c, int offsetX, int offsetY,bool scanCell)
+{
+  int newMotorA;
+  int newMotorB;
+  Wait(100);
+  int oldMotorA=MotorRotationCount(OUT_A);
+  int oldMotorB=MotorRotationCount(OUT_B);
+  ResetTachoCount(OUT_AB);
+  int y=(r-4)*CELLHEIGHT;
+  newMotorB=sensorCellX[c] + offsetX;
+  newMotorA=sensorCellY[c] + y - offsetY -2520;
+  int DiffMotorB=newMotorB-oldMotorB;
+  int DiffMotorA=newMotorA-oldMotorA;
+  RotateMotorEx(OUT_B,50,DiffMotorB,0,false,true);
+  if(scanCell && DiffMotorA>0)
+  {
+    RotateMotorExPID(OUT_A,50,DiffMotorA+500,0,false,true,50,40,90);
+    RotateMotorExPID(OUT_A,50,-500,0,false,true,50,40,90);
+  }
+  else
+    RotateMotorExPID(OUT_A,50,DiffMotorA,0,false,true,50,40,90);
+}
+
+// Scan Cell Function
+void ScanCell(int r, int c)
+{
+  int direction;
+  int offset;
+  if(c<4)
+    direction=-1;
+  else
+    direction=1;
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    bmp[i]=0;
+  if(direction == 1)
+    offset=leftToRightOffset;
+  else
+    offset=rightToLeftOffset;
+  MoveSensor(r,c,-1*direction*(BEFORE*STEP_X +(SIZE_X*3*STEP_X)/2 - offset),-250,true);
+  TextOut(25,LCD_LINE1,"Scanning",true);
+  for(int y=0;y<SIZE_Y;y++)
+  {
+    RotateMotor(OUT_A, -1 * SPEED_Y,STEP_Y);
+    ScanRow(y,direction);
+  }
+}
+
+
+void DrawImage()
+{
+  for(int y=0;y<SIZE_Y;y++)
+  {
+    RectOut(0,y*2,17,1);
+    for(int x=0;x<SIZE_X;x++)
+    {
+      if(image[y*SIZE_X+x]==0)
+        RectOut(18+x*2,y*2,1,1);
+    }
+    RectOut(82,y*2,17,1);
+  }
+}
+
+// Thresholding Function
+void  Thresholding()
+{
+  TextOut(10,LCD_LINE1,"Thresholding",true);
+  Wait(2000);
+  byte threshold;
+  long maxValue=0;
+  int whiteCount=0;
+  int blackCount=0;
+  byte min=bmp[0];
+  for(int i=1;i<SIZE_X*SIZE_Y;i++)
+    if(bmp[i] < min)
+      min = bmp[i];
+  for(byte t=min+2;whiteCount >= blackCount ;t++)
+  {
+    long whiteSum=0;
+    long blackSum=0;
+    whiteCount=0;
+    blackCount=0;
+    for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    {
+      byte value=bmp[i];
+      if(value > t)
+      {
+        whiteCount++;
+        whiteSum+=value;
+      }
+      else
+      {
+        blackCount++;
+        blackSum+=value;
+        Pixel(i);
+        if(blackCount>SIZE_X*SIZE_Y/2)
+          break;
+      }
+    }
+    if(blackCount>30 && whiteCount>blackCount)
+    {
+      long blackMean=blackSum*10/blackCount;
+      long whiteMean=whiteSum*10/whiteCount;
+      long diff=whiteMean-blackMean;
+      whiteCount/=10;
+      blackCount/=10;
+      long value = diff*diff*whiteCount*blackCount;
+      if(value > maxValue)
+      {
+        maxValue=value;
+        threshold=t;
+      }
+    }
+  }
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+  {
+    if(bmp[i] < threshold)
+    {
+      image[i] = 1;
+      //check if peak (holes in 6,8,9 maybe not recognized by threshold)
+      for(int j=i-1;j>0;j--)
+        if(bmp[j] > bmp[i])
+          break;
+        else if(bmp[i] - bmp[j] >= 2)
+        {
+          for(int k=i+1;k<SIZE_X*SIZE_Y;k++)
+            if(bmp[k] > bmp[i])
+              break;
+            else if(bmp[i] - bmp[k] >= 2)
+            {
+              image[i] = 0;
+              break;
+            }
+        }
+    }
+    else
+      image[i] = 0;
+  }
+  for(int i=0;i<SIZE_X;i++)
+  {
+    image[i]=0;
+    image[SIZE_X*SIZE_Y-SIZE_X+i]=0;
+  }
+  for(int i=0;i<SIZE_X*SIZE_Y;i+=SIZE_X)
+  {
+    image[i]=0;
+    image[SIZE_X-1+i]=0;
+  }
+
+  for(int i=SIZE_X;i<SIZE_X*SIZE_Y-SIZE_X;i++)
+    if(image[i-SIZE_X]==1 && image[i+SIZE_X]==1)
+      image[i]=1;
+
+  TextOut(10,LCD_LINE1,"Thresholding",true);
+  DrawImage();
+}
+
+
+// Segmentation Algorithm Function
+void Segmentation()
+{
+  TextOut(0,LCD_LINE1,"  Segmentation  ");
+  int pos;
+  int middle=SIZE_X*SIZE_Y/2;
+  int stack[SIZE_X*SIZE_Y/2];
+  int stackSize=0;
+  for(int i=0;i<SIZE_X/2;i++)
+  {
+    pos=middle+i;
+    if(image[pos]==1)
+      break;
+    pos=middle-i;
+    if(image[pos]==1)
+      break;
+  }
+  stack[0]=pos;
+  while(stackSize>=0)
+  {
+    pos=stack[stackSize--];
+    for(int i=-1;i<2;i++)
+      for(int j=-1;j<2;j++)
+      {
+        int p=pos+i*SIZE_X+j;
+        if(image[p]==1)
+        {
+          stack[++stackSize]=p;
+          image[p]=2;
+        }
+      }
+  }
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    if(image[i]==2)
+      image[i]=1;
+    else
+      image[i]=0;
+  DrawImage();
+}
+
+// Thinning Algorithm function
+void Thinning()
+{
+  TextOut(0,LCD_LINE1,"    Thinning    ");
+  for(int y=0;y<SIZE_Y-2;y++)
+  {
+    RectOut(0,y*2,17,1);
+    for(int x=0;x<SIZE_X;x++)
+    {
+      if(image[y*SIZE_X+x]==0)
+        RectOut(18+x*2,y*2,1,1);
+    }
+    RectOut(82,y*2,17,1);
+  }
+  bool mark[SIZE_X*SIZE_Y];
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    mark[i]=false;
+  int marked=1;
+  while(marked>0)
+  {
+    marked=0;
+    for(int i=SIZE_X+1;i<SIZE_X*SIZE_Y-SIZE_X-1;i++)
+      if(image[i])
+      {
+        byte p1=image[i-SIZE_X];
+        byte p2=image[i-SIZE_X+1];
+        byte p3=image[i+1];
+        byte p4=image[i+SIZE_X+1];
+        byte p5=image[i+SIZE_X];
+        byte p6=image[i+SIZE_X-1];
+        byte p7=image[i-1];
+        byte p8=image[i-SIZE_X-1];
+        byte n=p1+p2+p3+p4+p5+p6+p7+p8;
+        byte s=0;
+        if(p1==0 && p2==1)  s++;
+        if(p2==0 && p3==1)  s++;
+        if(p3==0 && p4==1)  s++;
+        if(p4==0 && p5==1)  s++;
+        if(p5==0 && p6==1)  s++;
+        if(p6==0 && p7==1)  s++;
+        if(p7==0 && p8==1)  s++;
+        if(p8==0 && p1==1)  s++;
+        if(n>=2 && s==1 && p1*p3*p5==0 && p3*p5*p7==0)
+        {
+          mark[i]=true;
+          marked++;
+        }
+      }
+    for(int i=0;i<SIZE_X*SIZE_Y;i++)
+      if(mark[i])
+      {
+        image[i]=0;
+        mark[i]=0;
+        Pixel(i);
+      }
+    for(int i=SIZE_X+1;i<SIZE_X*SIZE_Y-SIZE_X-1;i++)
+      if(image[i])
+      {
+        byte p1=image[i-SIZE_X];
+        byte p2=image[i-SIZE_X+1];
+        byte p3=image[i+1];
+        byte p4=image[i+SIZE_X+1];
+        byte p5=image[i+SIZE_X];
+        byte p6=image[i+SIZE_X-1];
+        byte p7=image[i-1];
+        byte p8=image[i-SIZE_X-1];
+        byte n=p1+p2+p3+p4+p5+p6+p7+p8;
+        byte s=0;
+        if(p1==0 && p2==1)  s++;
+        if(p2==0 && p3==1)  s++;
+        if(p3==0 && p4==1)  s++;
+        if(p4==0 && p5==1)  s++;
+        if(p5==0 && p6==1)  s++;
+        if(p6==0 && p7==1)  s++;
+        if(p7==0 && p8==1)  s++;
+        if(p8==0 && p1==1)  s++;
+        if(n>=2 && s==1 && p1*p3*p7==0 && p1*p5*p7==0)
+        {
+          mark[i]=true;
+          marked++;
+        }
+      }
+    for(int i=0;i<SIZE_X*SIZE_Y;i++)
+      if(mark[i])
+      {
+        image[i]=0;
+        mark[i]=0;
+        Pixel(i);
+      }
+  }
+  for(int i=SIZE_X+1;i<SIZE_X*SIZE_Y-SIZE_X-1;i++)
+    if(image[i])
+    {
+      byte p1=image[i-SIZE_X];
+      byte p2=image[i-SIZE_X+1];
+      byte p3=image[i+1];
+      byte p4=image[i+SIZE_X+1];
+      byte p5=image[i+SIZE_X];
+      byte p6=image[i+SIZE_X-1];
+      byte p7=image[i-1];
+      byte p8=image[i-SIZE_X-1];
+      byte n=p1+p2+p3+p4+p5+p6+p7+p8;
+      byte s=0;
+      if(p1==0 && p2==0 && p3==1) s++;
+      if(p3==0 && p4==0 && p5==1) s++;
+      if(p5==0 && p6==0 && p7==1) s++;
+      if(p7==0 && p8==0 && p1==1) s++;
+      if(p1==0 && p2==1)          s++;
+      if(p3==0 && p4==1)          s++;
+      if(p5==0 && p6==1)          s++;
+      if(p7==0 && p8==1)          s++;
+      if(n>=2  && s==1)
+      {
+        image[i]=0;
+        Pixel(i);
+      }
+    }
+}
+
+int Neighbor(int pos, int prevPos,int &nextPos)
+{
+  if(pos!=prevPos && image[pos])
+  {
+    nextPos=pos;
+    return 1;
+  }
+  else
+    return 0;
+}
+
+int TipLen(int pos)
+{
+  int prevPos=-1;
+  int nextPos;
+  int n;
+  int length=0;
+  do
+  {
+    if(++length > 5)
+      break;
+    n=Neighbor(pos-SIZE_X,prevPos,nextPos);
+    n+=Neighbor(pos-SIZE_X+1,prevPos,nextPos);
+    n+=Neighbor(pos+1,prevPos,nextPos);
+    n+=Neighbor(pos+SIZE_X+1,prevPos,nextPos);
+    n+=Neighbor(pos+SIZE_X,prevPos,nextPos);
+    n+=Neighbor(pos+SIZE_X-1,prevPos,nextPos);
+    n+=Neighbor(pos-1,prevPos,nextPos);
+    n+=Neighbor(pos-SIZE_X-1,prevPos,nextPos);
+    prevPos=pos;
+    pos=nextPos;
+  }
+  while(n==1)
+  return length;
+}
+
+// Find Tips.
+int Tip(int pos,bool &longTip)
+{
+  byte p1=image[pos-SIZE_X];
+  byte p2=image[pos-SIZE_X+1];
+  byte p3=image[pos+1];
+  byte p4=image[pos+SIZE_X+1];
+  byte p5=image[pos+SIZE_X];
+  byte p6=image[pos+SIZE_X-1];
+  byte p7=image[pos-1];
+  byte p8=image[pos-SIZE_X-1];
+  byte n=p1+p2+p3+p4+p5+p6+p7+p8;
+  if(n==1)
+  {
+    int tipLen=TipLen(pos);
+    longTip=tipLen > 5;
+    if(tipLen==1)
+      return 0;
+    else if(p1)  return(NORTH);
+    else if(p2)	return(NORTHWEST);
+    else if(p3)	return(WEST);
+    else if(p4)	return(SOUTHWEST);
+    else if(p5)	return(SOUTH);
+    else if(p6)	return(SOUTHEAST);
+    else if(p7)	return(EAST);
+    else if(p8)	return(NORTHEAST);
+  }
+  else
+    return 0;
+}
+
+
+int Recognization(int r, int c)
+{
+  int topPixel;
+  int botPixel=0;
+  int leftPixel=SIZE_X;
+  int rightPixel=0;
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    if(image[i])
+    {
+      if(!botPixel)
+        botPixel=i;
+      topPixel=i;
+      int col=i%SIZE_X;
+      if(col<leftPixel)
+        leftPixel=col;
+      if(col>rightPixel)
+        rightPixel=col;
+    }
+  int topRow=topPixel/SIZE_X;
+  int botRow=botPixel/SIZE_X;
+  int width=rightPixel-leftPixel+1;
+  int longTipUpper=0;
+  int longTipLower=0;
+  int leftTips=0;
+  int topTip=0;
+  int botTip=0;
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    if(image[i])
+    {
+      bool longTip=false;
+      int tip=Tip(i,longTip);
+      if(tip)
+      {
+        if(longTip)
+        {
+          if(!longTipLower)
+            longTipLower=tip;
+          else if(!longTipUpper)
+            longTipUpper=tip;
+        }
+        if(tip==WEST || tip==NORTHWEST || tip==SOUTHWEST)
+          leftTips++;
+        if(i/SIZE_X==topRow)
+          topTip=tip;
+        if(i/SIZE_X==botRow)
+          botTip=tip;
+      }
+    }
+  int digit;
+  if(width<6)
+    digit=1;
+  else if(leftTips==3 ||((longTipUpper == WEST||longTipUpper==NORTHWEST) && (longTipLower==WEST ||longTipLower==NORTHWEST) && botTip==0))
+    digit=3;
+  else if((longTipUpper==WEST||longTipUpper==NORTHWEST||longTipUpper==SOUTHWEST) && (longTipLower==WEST||longTipLower==SOUTHWEST||longTipLower==SOUTH))
+    digit=7;
+  else if(leftTips && (longTipLower==EAST||longTipLower==SOUTHEAST||longTipLower==NORTHEAST) && topTip!=NORTHEAST && topTip!=EAST)
+    digit=2;
+  else if((longTipUpper==EAST||longTipUpper==NORTHEAST||longTipUpper==SOUTHEAST) && (longTipLower==WEST||longTipLower==SOUTHWEST||longTipLower==NORTHWEST))
+    digit=5;
+  else if((topTip==NORTH||topTip==NORTHEAST||topTip==NORTHWEST) &&(botTip==SOUTH||botTip==SOUTHWEST||botTip==SOUTHEAST))
+    digit=4;
+  else if(topTip==NORTH||topTip==NORTHEAST||topTip==EAST)
+    digit=6;
+  else if(botTip==SOUTH||botTip==SOUTHWEST||botTip==WEST || longTipLower==WEST||longTipLower==SOUTHWEST||longTipLower==SOUTH)
+    digit=9;
+  else
+    digit=8;
+   NumOut(45,LCD_LINE5,digit,true);
+   
+  return digit;
+}
+
+// Move Pen (left and right)
+void MovePen(int r, int c, int offsetX, int offsetY)
+{
+  int newMotorA;
+  int newMotorB;
+  Wait(100);
+  int oldMotorA=MotorRotationCount(OUT_A);
+  int oldMotorB=MotorRotationCount(OUT_B);
+  ResetTachoCount(OUT_AB);
+  int y=(r-4)*CELLHEIGHT;
+  newMotorB=penCellX[c] + offsetX;
+  newMotorA=penCellY[c] + y - offsetY - 600;
+  int DiffMotorB=newMotorB-oldMotorB;
+  int DiffMotorA=newMotorA-oldMotorA;
+  RotateMotorEx(OUT_B,50,DiffMotorB,0,false,true);
+  if(DiffMotorA<0)
+  {
+    RotateMotorExPID(OUT_A,50,DiffMotorA-200,0,false,true,50,40,90);
+    RotateMotorExPID(OUT_A,50,+200,0,false,true,50,40,90);
+  }
+  else
+    RotateMotorExPID(OUT_A,50,DiffMotorA,0,false,true,50,40,90);
+}
+
+
+// Write Digit Function
+void WriteDigit(int digit, int row, int col)
+{
+  int xStep=10;  // originAL 5
+  int yStep=40;  // ORIGNAL 15
+  int startX,startY;
+  string sequence;
+  string sequence2;
+  switch(digit)
+  {
+  
+  case 0:
+     sequence = "LLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+     sequence2 = "RRRRRRRRRRRRRRRRRR";
+     break;
+  
+  break;
+    case 1:
+      sequence="DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"; 
+      sequence2="UUUUUUUUUUUUUUUUUUUUUUUUUUUUUU"; 
+      startX=0;
+      startY=6;
+      break;
+    case 2:
+      sequence="LLLLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLLLLLDDDDDDDDDDDDDDRRRRRRRRRRRRRRRRRRRRRRRR";
+      sequence2= "UUUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+      startX=-4;
+      startY=6;
+      break;
+    case 3:
+      sequence="LLLLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLLL";
+      sequence2 = "RRRRRRRRRRRRRRRRRRRRUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+      startX=-4;
+      startY=6;
+      break;
+    case 4:
+    
+      sequence="DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDUUUUUUUUUUUUUUUURRRRRRLLLLLLLLLLLLLLLLLLLLLLLLUUUUUUUUUUUUUU";
+      sequence2 = "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRR";
+      startX=-4;
+      startY=6;
+      break;
+    case 5:
+      sequence="LLLLLLLLLLLLLLLLRRDDDDDDDDDDDDDUURRRRRRRRRRRRRRRRDDDDDDDDDDDDDDDLLLLLLLLLLLLLLLL";
+      sequence2 =  "RRRRRRRRRRRRRRRRUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+      startX=4;
+      startY=6;
+      break;
+    
+    case 6:
+      sequence="LLLLLLLLLLLLLLLLLLDDDDDDDDDDDDDDDDDDDDDDDDDDRRRRRRRRRRRRRRRRRRRRRRUUUUUUUUUUUUUULLLLLLLLLLLLLLLLLLLLLL";
+ 
+      sequence2 = "UUUUUUUUUUUURRRRRRRRRRRRRRRRRRRRRRRR";
+      startX=4;
+      startY=6;
+      break;
+    case 7:
+      sequence="LLLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRRDLDLDDLDDLDDLDDLDDLDDLDDLDDLDDLDDLDDLDDL";
+      sequence2 = "RRRRRRRRRRRRRRRUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+      startX=-4;
+      startY=6;
+      break;
+    case 8:
+      sequence="LLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+      sequence2="RRRRRRRRRRRRRRRRRR";
+    
+      startX=-3;
+      startY=6;
+      break;
+    case 9:
+      sequence="LLLLLLLLLLLLLLLLLLUUUUUUUUUUUUUURRRRRRRRRRRRRRRRRRRRRRDDDDDDDDDDDDDDDDDDDDDDDDDDDDLLLLLLLLLLLLLLLLLLLL";
+      sequence2 = "RRRRRRRRRRRRRRRRRRRRUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+
+      startX=4;
+      startY=0;
+      break;
+  }
+
+  PenDown();
+  for(int i=0;i<StrLen(sequence);i++)
+  {
+    char direction=StrIndex(sequence,i);
+    if(direction=='L')
+      RotateMotorEx(OUT_B, PENSPEED_X,-1 * xStep,0,false,false);
+    else if(direction=='R')
+      RotateMotorEx(OUT_B, PENSPEED_X,xStep,0,false,false);
+    else if(direction=='U')
+      RotateMotorEx(OUT_A, PENSPEED_Y,-1*yStep,0,false,false);
+    else if(direction=='D')
+      RotateMotorEx(OUT_A, PENSPEED_Y,yStep,0,false,false);
+  }
+  Off(OUT_AB);
+  PenUp();
+
+    for(int i=0;i<StrLen(sequence2);i++)
+  {
+    char direction=StrIndex(sequence2,i);
+    if(direction=='L')
+      RotateMotorEx(OUT_B, PENSPEED_X+50,-1 * xStep,0,false,false);
+    else if(direction=='R')
+      RotateMotorEx(OUT_B, PENSPEED_X+50,xStep,0,false,false);
+    else if(direction=='U')
+      RotateMotorEx(OUT_A, PENSPEED_Y+50,-1*yStep,0,false,false);
+    else if(direction=='D')
+      RotateMotorEx(OUT_A, PENSPEED_Y+50,yStep,0,false,false);
+  }
+}
+
+
+
+// Scan Digit Function
+void scanDigit(int direction)
+{
+
+ for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    bmp[i]=0;
+ TextOut(25,LCD_LINE1,"Scanning",true);
+  for(int y=0;y<SIZE_Y;y++)
+  {
+    RotateMotor(OUT_A, -1 * SPEED_Y,STEP_Y);
+    ScanRow(y,direction);
+  }
+}
+
+// Opeartion Recognition Function
+int operationRecognization()
+{
+  int topPixel;
+  int botPixel=0;
+  int leftPixel=SIZE_X;
+  int rightPixel=0;
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    if(image[i])
+    {
+      if(!botPixel)
+        botPixel=i;
+      topPixel=i;
+      int col=i%SIZE_X;
+      if(col<leftPixel)
+        leftPixel=col;
+      if(col>rightPixel)
+        rightPixel=col;
+    }
+  int topRow=topPixel/SIZE_X;
+  int botRow=botPixel/SIZE_X;
+  int width=rightPixel-leftPixel+1;
+  int longTipUpper=0;
+  int longTipLower=0;
+  int leftTips=0;
+  int rightTips=0;
+  int topTip=0;
+  int botTip=0;
+  for(int i=0;i<SIZE_X*SIZE_Y;i++)
+    if(image[i])
+    {
+      bool longTip=false;
+      int tip=Tip(i,longTip);
+      if(tip)
+      {
+        if(longTip)
+        {
+          if(!longTipLower)
+            longTipLower=tip;
+          else if(!longTipUpper)
+            longTipUpper=tip;
+        }
+        if(tip==WEST || tip==NORTHWEST || tip==SOUTHWEST)
+          leftTips++;
+        if (tip == EAST || tip == SOUTHEAST || tip == NORTHEAST)
+           rightTips++;
+        if(i/SIZE_X==topRow)
+          topTip=tip;
+        if(i/SIZE_X==botRow)
+          botTip=tip;
+      }
+    }
+  int digit;
+
+   // +
+  if (topTip==NORTH && botTip == SOUTH)
+       digit = 1;
+  else if ( leftTips > 1 || rightTips > 1)
+       digit = 4;
+  else if ( leftTips == 1 && rightTips == 1)   //((topTip ==   WEST || topTip == EAST) && (botTip == WEST || botTip == EAST))      ||  ((topTip ==   SOUTHWEST || topTip == SOUTHEAST) && (botTip == SOUTHWEST || botTip == SOUTHEAST))    ) // Subtract
+         digit = 2;
+  else //if (   (topTip == NORTHEAST && botTip == SOUTHWEST) ||(topTip==EAST && botTip==SOUTH) /*case2*/  || (topTip==EAST && botTip==SOUTHWEST) /*case3*/ || (topTip==NORTHEAST && botTip==WEST) /*case4*/  || (topTip==NORTH && botTip==WEST) /*case5*/ || (topTip==NORTH && botTip==SOUTHWEST) || (topTip==NORTHEAST && botTip==SOUTH))
+         digit = 3;  // Divide
+
+    
+
+     string opst;
+     opst="else";
+    switch(digit){
+    case 1:
+    opst="+";
+    break;
+    case 2:
+    opst="-";
+    break;
+    case 3:
+    opst="/";
+    break;
+    case 4:
+    opst="X";
+    break;}
+   TextOut(45,LCD_LINE5,opst,true);
+
+  return digit;
+}
+
+
+
+
+task main()
+{
+     // Initialize Sensor
+       SetSensorLight(IN_2);
+       
+       	// Storage Variables
+             int digit1,digit2;
+             int operation;
+
+        // Start
+       RotateMotor(OUT_A,70,-3500);
+
+        // go left
+        RotateMotor(OUT_B,70,-270);
+        RotateMotor(OUT_A,70,-320);  // was -200 before
+        scanDigit(-1);
+        Thresholding();
+        Segmentation();
+        Wait(1000);
+        Thinning();
+        Wait(1000);
+        digit1 = Recognization(0,0);
+        Wait(1000);
+        
+
+        // move right
+        RotateMotor(OUT_B,70,400);
+        // move back
+        RotateMotor(OUT_A,70,1250); // was 1150
+
+
+        scanDigit(-1);
+        Thresholding();
+        Segmentation();
+        Wait(1000);
+        Thinning();
+        Wait(1000);
+        operation = operationRecognization();
+        Wait(1000);
+
+
+         // right Digit
+        RotateMotor(OUT_B,70,180);
+         RotateMotor(OUT_A,70,800);
+
+         scanDigit(1);
+        Thresholding();
+        Segmentation();
+        Wait(1000);
+        Thinning();
+        Wait(1000);
+        digit2 = Recognization(0,0);
+        Wait(10000);
+
+        int answer = 0;
+        if (operation == 1) {
+          // add
+          answer = digit1 + digit2;
+        } else if (operation == 2) {
+          // subtract
+          answer = digit1 - digit2;
+        } else if (operation == 3) {
+          answer = digit1 / digit2;
+        } else {
+          // multiply
+          answer = digit1 * digit2;
+        }
+
+
+
+        RotateMotor(OUT_A,70,500);
+ 
+        string AnswerString= NumToStr(answer);
+     
+
+
+         switch(StrLen(AnswerString)){
+          case 1:
+          WriteDigit(answer,0,0);
+          break;
+          
+          case 2:
+               RotateMotor(OUT_B,70,-200);
+               string number = SubStr(AnswerString,0,1);
+               int number1 = StrToNum(number);
+               WriteDigit(number1,0,0);
+
+               RotateMotor(OUT_B,70,210);
+                number = SubStr(AnswerString,1,1);
+                number1 = StrToNum(number);
+              WriteDigit(number1,0,0);
+         }
+
+        
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
